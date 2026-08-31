@@ -1,0 +1,43 @@
+name: Deploy to GCP
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gcp-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Update container on Compute Engine
+        run: |
+          gcloud compute instances update-container "${{ vars.GCP_VM_NAME }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --zone="${{ vars.GCP_ZONE }}" \
+            --container-image="docker.io/actualbudget/actual-server:latest" \
+            --container-mount-host-path=mount-path=/data,host-path=/var/lib/actual-budget,mode=rw \
+            --container-restart-policy=always
+
+      - name: Verify deployment
+        run: |
+          IP=$(gcloud compute instances describe "${{ vars.GCP_VM_NAME }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --zone="${{ vars.GCP_ZONE }}" \
+            --format="value(networkInterfaces[0].accessConfigs[0].natIP)")
+
+          echo "Deployed to http://${IP}:5006"
+          echo "instance_ip=${IP}" >> "$GITHUB_OUTPUT"
