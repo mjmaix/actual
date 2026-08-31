@@ -2,42 +2,53 @@ name: Deploy to GCP
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    concurrency:
-      group: gcp-deploy
-      cancel-in-progress: false
+    environment: gcp
 
     steps:
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
+      - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Update container on Compute Engine
+      - name: Deploy to Compute Engine
         run: |
-          gcloud compute instances update-container "${{ vars.GCP_VM_NAME }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
+          gcloud compute ssh "${{ vars.GCP_VM_NAME }}" \
             --zone="${{ vars.GCP_ZONE }}" \
-            --container-image="docker.io/actualbudget/actual-server:latest" \
-            --container-mount-host-path=mount-path=/data,host-path=/var/lib/actual-budget,mode=rw \
-            --container-restart-policy=always
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --quiet \
+            --command='
+              set -e
+              docker pull docker.io/actualbudget/actual-server:latest
+              docker rm -f actual-budget 2>/dev/null || true
+              docker run -d \
+                --name actual-budget \
+                --restart unless-stopped \
+                -p 127.0.0.1:5007:5006 \
+                -v /var/lib/actual-budget:/data \
+                docker.io/actualbudget/actual-server:latest
+              docker rm -f actual-nginx 2>/dev/null || true
+              docker run -d \
+                --name actual-nginx \
+                --restart unless-stopped \
+                --network host \
+                -v /var/lib/nginx/conf.d:/etc/nginx/conf.d:ro \
+                nginx:alpine
+            '
 
       - name: Verify deployment
         run: |
-          IP=$(gcloud compute instances describe "${{ vars.GCP_VM_NAME }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
+          EXTERNAL_IP=$(gcloud compute instances describe "${{ vars.GCP_VM_NAME }}" \
             --zone="${{ vars.GCP_ZONE }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
             --format="value(networkInterfaces[0].accessConfigs[0].natIP)")
-
-          echo "Deployed to http://${IP}:5006"
-          echo "instance_ip=${IP}" >> "$GITHUB_OUTPUT"
+          sleep 10
+          curl -sSf -o /dev/null "http://$EXTERNAL_IP:5006" && echo "✓ Server is up and serving"

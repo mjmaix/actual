@@ -16,8 +16,16 @@ set -euo pipefail
 #   export GCP_PROJECT_ID="my-actual-budget"
 #   export GCP_REGION="us-central1"     # or your nearest free-tier region
 #   export GCP_ZONE="us-central1-a"
+#   source .env (or export vars manually)
 #   bash gcp/setup.sh
 # ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/../.env" ]; then
+  set -a
+  source "$SCRIPT_DIR/../.env"
+  set +a
+fi
 
 PROJECT_ID="${GCP_PROJECT_ID:-actual-budget-gcp}"
 REGION="${GCP_REGION:-us-central1}"
@@ -65,6 +73,7 @@ echo "[3/6] Enabling required APIs..."
 gcloud services enable \
   compute.googleapis.com \
   containerregistry.googleapis.com \
+  oslogin.googleapis.com \
   --project="$PROJECT_ID"
 
 # --- Step 4: Create firewall rule ---
@@ -86,49 +95,81 @@ fi
 
 # --- Step 5: Create the VM ---
 echo "[5/6] Creating VM instance..."
-CONTAINER_DECLARATION=$(cat <<EOF
-spec:
-  containers:
-    - name: actual-budget
-      image: docker.io/actualbudget/actual-server:latest
-      ports:
-        - containerPort: $CONTAINER_PORT
-          hostPort: $CONTAINER_PORT
-      volumeMounts:
-        - name: data
-          mountPath: /data
-      restartPolicy: Always
-  volumes:
-    - name: data
-      hostPath:
-        path: /var/lib/actual-budget
-  restartPolicy: Always
-EOF
-)
+
+STARTUP_SCRIPT="/tmp/actual-budget-startup.sh"
+cat > "$STARTUP_SCRIPT" <<'SCRIPT'
+#! /bin/bash
+set -e
+IMAGE="docker.io/actualbudget/actual-server:latest"
+DATA_DIR="/var/lib/actual-budget"
+PORT="5006"
+
+mkdir -p "$DATA_DIR"
+mkdir -p /var/lib/nginx/conf.d
+
+# Create nginx reverse-proxy config with COOP/COEP headers
+cat > /var/lib/nginx/conf.d/default.conf <<'NGINX'
+server {
+    listen 5006;
+    location / {
+        proxy_pass http://127.0.0.1:5007;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    }
+}
+NGINX
+
+# Run actual-server on port 5007 (internal)
+docker rm -f actual-budget 2>/dev/null || true
+docker pull "$IMAGE"
+docker run -d \
+  --name actual-budget \
+  --restart unless-stopped \
+  -p 127.0.0.1:5007:"$PORT" \
+  -v "$DATA_DIR:/data" \
+  "$IMAGE"
+
+# Run nginx reverse proxy on port 5006 (external, with COOP/COEP headers)
+docker rm -f actual-nginx 2>/dev/null || true
+docker run -d \
+  --name actual-nginx \
+  --restart unless-stopped \
+  --network host \
+  -v /var/lib/nginx/conf.d:/etc/nginx/conf.d:ro \
+  nginx:alpine
+SCRIPT
 
 if ! gcloud compute instances describe "$VM_NAME" \
   --project="$PROJECT_ID" --zone="$ZONE" &>/dev/null; then
-  gcloud compute instances create-with-container "$VM_NAME" \
+  gcloud compute instances create "$VM_NAME" \
     --project="$PROJECT_ID" \
     --zone="$ZONE" \
     --machine-type="$MACHINE_TYPE" \
     --boot-disk-size="$DISK_SIZE" \
     --boot-disk-type=pd-standard \
-    --container-image="docker.io/actualbudget/actual-server:latest" \
-    --container-mount-host-path=mount-path=/data,host-path=/var/lib/actual-budget,mode=rw \
-    --container-restart-policy=always \
+    --image-family="$IMAGE_FAMILY" \
+    --image-project="$IMAGE_PROJECT" \
     --tags=actual-budget \
     --labels=app=actual-budget,env=production \
-    --metadata=cos-update-strategy=update_enabled
+    --metadata-from-file=startup-script="$STARTUP_SCRIPT"
 else
-  echo "  VM already exists, updating container..."
-  gcloud compute instances update-container "$VM_NAME" \
+  echo "  VM already exists, updating..."
+  gcloud compute instances add-metadata "$VM_NAME" \
     --project="$PROJECT_ID" \
     --zone="$ZONE" \
-    --container-image="docker.io/actualbudget/actual-server:latest" \
-    --container-mount-host-path=mount-path=/data,host-path=/var/lib/actual-budget,mode=rw \
-    --container-restart-policy=always
+    --metadata-from-file=startup-script="$STARTUP_SCRIPT"
+  gcloud compute instances reset "$VM_NAME" \
+    --project="$PROJECT_ID" \
+    --zone="$ZONE"
 fi
+rm -f "$STARTUP_SCRIPT"
 
 # --- Step 6: Output URL ---
 EXTERNAL_IP=$(gcloud compute instances describe "$VM_NAME" \

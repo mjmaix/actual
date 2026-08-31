@@ -89,6 +89,9 @@ DESIGN.json
 # build output
 package.tgz
 
+# Local GCP env vars (project-specific, not committed)
+.env
+
 # Fly.io configuration
 fly.toml
 
