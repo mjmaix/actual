@@ -19,11 +19,22 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy to Compute Engine
+      - name: Set up SSH key
         run: |
-          gcloud compute ssh "${{ vars.GCP_VM_NAME }}" \
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/gcp-deploy -N "" -q
+          gcloud compute instances add-metadata "${{ vars.GCP_VM_NAME }}" \
             --zone="${{ vars.GCP_ZONE }}" \
             --project="${{ vars.GCP_PROJECT_ID }}" \
+            --metadata-from-file=ssh-keys=<(echo "clouduser:$(cat ~/.ssh/gcp-deploy.pub)")
+          sleep 5
+
+      - name: Deploy to Compute Engine
+        run: |
+          gcloud compute ssh "clouduser@${{ vars.GCP_VM_NAME }}" \
+            --zone="${{ vars.GCP_ZONE }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --ssh-key-file=~/.ssh/gcp-deploy \
             --quiet \
             --command='
               set -e
@@ -44,11 +55,20 @@ jobs:
                 nginx:alpine
             '
 
+      - name: Clean up SSH key
+        if: always()
+        run: |
+          gcloud compute instances remove-metadata "${{ vars.GCP_VM_NAME }}" \
+            --zone="${{ vars.GCP_ZONE }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --keys=ssh-keys 2>/dev/null || true
+
       - name: Verify deployment
+        if: success()
         run: |
           EXTERNAL_IP=$(gcloud compute instances describe "${{ vars.GCP_VM_NAME }}" \
             --zone="${{ vars.GCP_ZONE }}" \
             --project="${{ vars.GCP_PROJECT_ID }}" \
             --format="value(networkInterfaces[0].accessConfigs[0].natIP)")
           sleep 10
-          curl -sSf -o /dev/null "http://$EXTERNAL_IP:5006" && echo "✓ Server is up and serving"
+          curl -sSf -o /dev/null "http://$EXTERNAL_IP:5006" && echo "Deploy successful"
