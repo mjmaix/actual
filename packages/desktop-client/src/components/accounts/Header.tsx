@@ -16,6 +16,7 @@ import {
   SvgDownloadThickBottom,
   SvgLockClosed,
   SvgPencil1,
+  SvgUploadThickBottom,
 } from '@actual-app/components/icons/v2';
 import { InitialFocus } from '@actual-app/components/initial-focus';
 import { Input } from '@actual-app/components/input';
@@ -50,6 +51,8 @@ import { useLocalPref } from '#hooks/useLocalPref';
 import { useSplitsExpanded } from '#hooks/useSplitsExpanded';
 import { useSyncedPref } from '#hooks/useSyncedPref';
 import { useSyncServerStatus } from '#hooks/useSyncServerStatus';
+import { pushModal } from '#modals/modalsSlice';
+import { useDispatch } from '#redux';
 
 import type { TableRef } from './Account';
 import { Balances } from './Balance';
@@ -183,6 +186,7 @@ export function AccountHeader({
   onMergeTransactions,
 }: AccountHeaderProps) {
   const { t } = useTranslation();
+  const dispatch = useDispatch();
 
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -358,6 +362,29 @@ export function AccountHeader({
                 style={{ marginRight: 4 }}
               />{' '}
               <Trans>Import</Trans>
+            </Button>
+          )}
+
+          {account && !account.closed && (
+            <Button
+              variant="bare"
+              onPress={() =>
+                dispatch(
+                  pushModal({
+                    modal: {
+                      name: 'reconcile-statement',
+                      options: { accountId: account.id },
+                    },
+                  }),
+                )
+              }
+            >
+              <SvgUploadThickBottom
+                width={13}
+                height={13}
+                style={{ marginRight: 4 }}
+              />{' '}
+              <Trans>Reconcile SOA</Trans>
             </Button>
           )}
 

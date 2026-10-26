@@ -381,6 +381,12 @@ export type Modal =
       };
     }
   | {
+      name: 'reconcile-statement';
+      options: {
+        accountId: AccountEntity['id'];
+      };
+    }
+  | {
       name: 'category-menu';
       options: {
         categoryId: CategoryEntity['id'];
