@@ -60,6 +60,12 @@ export type Modal =
       name: 'add-local-account';
     }
   | {
+      name: 'account-groups';
+      options: {
+        accountId: AccountEntity['id'];
+      };
+    }
+  | {
       name: 'close-account';
       options: {
         account: AccountEntity;
@@ -122,7 +128,8 @@ export type Modal =
   | {
       name: 'simplefin-init';
       options: {
-        onSuccess: () => void;
+        onSuccess: (perBudgetFile: boolean) => void;
+        credentialSource: BankSyncCredentialSource;
       };
     }
   | {
@@ -310,7 +317,8 @@ export type Modal =
   | {
       name: 'payee-autocomplete';
       options: {
-        onSelect: (payeeId: string) => void;
+        onSelect: (payeeId: string | null) => void;
+        showNoneOption?: boolean;
         onClose?: () => void;
       };
     }
@@ -357,8 +365,12 @@ export type Modal =
         onEditNotes: (id: NoteEntity['id']) => void;
         onClose?: () => void;
         onReconcile?: () => void;
-        onToggleRunningBalance?: () => void;
-        onToggleReconciled?: () => void;
+      };
+    }
+  | {
+      name: 'all-accounts-menu';
+      options: {
+        onClose?: () => void;
       };
     }
   | {
@@ -374,8 +386,10 @@ export type Modal =
         categoryId: CategoryEntity['id'];
         onSave: (category: CategoryEntity) => void;
         onEditNotes: (id: NoteEntity['id']) => void;
-        onDelete: (categoryId: CategoryEntity['id']) => void;
-        onToggleVisibility: (categoryId: CategoryEntity['id']) => void;
+        onDelete: (
+          categoryId: CategoryEntity['id'],
+          transferCategoryId?: CategoryEntity['id'],
+        ) => void;
         onEditAutomations?: (categoryId: CategoryEntity['id']) => void;
         onClose?: () => void;
       };
@@ -415,8 +429,10 @@ export type Modal =
           isIncome: CategoryGroupEntity['is_income'],
         ) => void;
         onEditNotes: (id: NoteEntity['id']) => void;
-        onDelete: (groupId: CategoryGroupEntity['id']) => void;
-        onToggleVisibility: (groupId: CategoryGroupEntity['id']) => void;
+        onDelete: (
+          groupId: CategoryGroupEntity['id'],
+          transferCategoryId?: CategoryEntity['id'],
+        ) => void;
         onClose?: () => void;
         onApplyBudgetTemplatesInGroup?: (
           categories: Array<CategoryEntity['id']>,
@@ -472,6 +488,7 @@ export type Modal =
         onCarryover?: (carryover: boolean) => void;
         onTransfer?: () => void;
         onCover?: () => void;
+        onFundGoal?: (amount: IntegerAmount) => void;
       };
     }
   | {
@@ -481,17 +498,6 @@ export type Modal =
         month: string;
         onCarryover: (carryover: boolean) => void;
         onShowActivity: () => void;
-      };
-    }
-  | {
-      name: 'envelope-summary-to-budget-menu';
-      options: {
-        month: string;
-        onTransfer: () => void;
-        onCover: () => void;
-        onHoldBuffer: () => void;
-        onResetHoldBuffer: () => void;
-        onBudgetAction: (month: string, action: string, arg?: unknown) => void;
       };
     }
   | {
@@ -739,7 +745,7 @@ type ReplaceModalPayload = {
 };
 
 type CollapseModalPayload = {
-  rootModalName: Modal['name'];
+  rootModalName: string;
 };
 
 const modalsSlice = createSlice({

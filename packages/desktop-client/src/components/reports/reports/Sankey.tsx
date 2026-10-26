@@ -26,7 +26,6 @@ import type {
   SankeyWidget,
   TimeFrame,
 } from '@actual-app/core/types/models';
-import * as d from 'date-fns';
 import { debounce } from 'es-toolkit/compat';
 import type { TFunction } from 'i18next';
 import type { SankeyData } from 'recharts/types/chart/Sankey';
@@ -37,16 +36,21 @@ import { MobilePageHeader, Page, PageHeader } from '#components/Page';
 import { SankeyGraph } from '#components/reports/graphs/SankeyGraph';
 import { Header } from '#components/reports/Header';
 import { LoadingIndicator } from '#components/reports/LoadingIndicator';
-import { calculateTimeRange } from '#components/reports/reportRanges';
+import {
+  boundMonthRangeFromDates,
+  calculateTimeRange,
+} from '#components/reports/reportRanges';
 import {
   buildSankeyData,
   createBaseGraphSpreadsheet,
   GRAPH_LAYER_ORDER,
   GraphLayers,
 } from '#components/reports/spreadsheets/sankey-spreadsheet';
-import type { Graph } from '#components/reports/spreadsheets/sankey-spreadsheet';
+import type {
+  Graph,
+  GraphLayer,
+} from '#components/reports/spreadsheets/sankey-spreadsheet';
 import { useReport } from '#components/reports/useReport';
-import { fromDateRepr } from '#components/reports/util';
 import { useCategories } from '#hooks/useCategories';
 import { useDashboardWidget } from '#hooks/useDashboardWidget';
 import { useFormatList } from '#hooks/useFormatList';
@@ -83,18 +87,18 @@ type GraphMode = 'budgeted' | 'spent';
 
 type LayerDirection = 'from' | 'to';
 type LayerRange = {
-  from: GraphLayers;
-  to: GraphLayers;
+  from: GraphLayer;
+  to: GraphLayer;
 };
 
-function getAvailableLayers(mode: GraphMode): GraphLayers[] {
+function getAvailableLayers(mode: GraphMode): GraphLayer[] {
   return GRAPH_LAYER_ORDER.filter(layer => {
     if (mode === 'budgeted') {
       return layer !== GraphLayers.IncomePayee;
     }
 
     return layer !== GraphLayers.Budget;
-  }) as GraphLayers[];
+  }) as GraphLayer[];
 }
 
 export function getDefaultLayerRange(mode: GraphMode): LayerRange {
@@ -157,8 +161,8 @@ function normalizeLayerRange(
 function getLayerMenuItems(
   mode: GraphMode,
   direction: LayerDirection,
-  otherLayer: GraphLayers,
-): GraphLayers[] {
+  otherLayer: GraphLayer,
+): GraphLayer[] {
   const availableLayers = getAvailableLayers(mode);
   const otherIndex = availableLayers.indexOf(otherLayer);
 
@@ -284,10 +288,10 @@ function CategorySortSelector({ value, onChange }: CategorySortSelectorProps) {
 
 type LayerSelectorProps = {
   direction: LayerDirection;
-  value: GraphLayers;
-  layerLabels: Record<GraphLayers, string>;
-  menuItems: GraphLayers[];
-  onChange: (layer: GraphLayers) => void;
+  value: GraphLayer;
+  layerLabels: Record<GraphLayer, string>;
+  menuItems: GraphLayer[];
+  onChange: (layer: GraphLayer) => void;
 };
 
 function LayerSelector({
@@ -323,7 +327,7 @@ function LayerSelector({
       >
         <Menu
           onMenuSelect={item => {
-            onChange(item as GraphLayers);
+            onChange(item as GraphLayer);
             setIsOpen(false);
           }}
           items={menuItems.map(layer => ({
@@ -522,10 +526,10 @@ function SankeyInner({ widget }: SankeyInnerProps) {
   const [layerRange, setLayerRange] = useState<LayerRange>(() =>
     normalizeLayerRange(widget?.meta?.mode ?? 'spent', {
       from:
-        (widget?.meta?.layerFrom as GraphLayers) ??
+        (widget?.meta?.layerFrom as GraphLayer) ??
         getDefaultLayerRange(widget?.meta?.mode ?? 'spent').from,
       to:
-        (widget?.meta?.layerTo as GraphLayers) ??
+        (widget?.meta?.layerTo as GraphLayer) ??
         getDefaultLayerRange(widget?.meta?.mode ?? 'spent').to,
     }),
   );
@@ -537,7 +541,7 @@ function SankeyInner({ widget }: SankeyInnerProps) {
     setLayerRange(prev => normalizeLayerRange(graphMode, prev));
   }, [graphMode]);
 
-  const layerLabels = useMemo<Record<GraphLayers, string>>(
+  const layerLabels = useMemo<Record<GraphLayer, string>>(
     () => ({
       [GraphLayers.IncomePayee]: t('Payee'),
       [GraphLayers.IncomeCategory]: t('Income category'),
@@ -558,7 +562,7 @@ function SankeyInner({ widget }: SankeyInnerProps) {
     [graphMode, layerFrom],
   );
 
-  function onChangeLayer(direction: LayerDirection, layer: GraphLayers) {
+  function onChangeLayer(direction: LayerDirection, layer: GraphLayer) {
     setLayerRange(prev => {
       const next =
         direction === 'from'
@@ -581,9 +585,16 @@ function SankeyInner({ widget }: SankeyInnerProps) {
       return null;
     }
 
-    return createBaseGraphSpreadsheet(
+    const [boundedStart, boundedEnd] = boundMonthRangeFromDates(
+      earliestTransaction,
+      latestTransaction,
       start,
       end,
+    );
+
+    return createBaseGraphSpreadsheet(
+      boundedStart,
+      boundedEnd,
       groupedCategories,
       conditions,
       conditionsOp,
@@ -592,6 +603,8 @@ function SankeyInner({ widget }: SankeyInnerProps) {
       showTransfers,
     );
   }, [
+    earliestTransaction,
+    latestTransaction,
     datesInitialized,
     start,
     end,
@@ -665,29 +678,13 @@ function SankeyInner({ widget }: SankeyInnerProps) {
       setDatesInitialized(true);
 
       const currentMonth = monthUtils.currentMonth();
-      let earliestMonth = earliestTransaction
-        ? monthUtils.monthFromDate(
-            d.parseISO(fromDateRepr(earliestTransaction.date)),
-          )
-        : currentMonth;
-      const latestTransactionMonth = latestTransaction
-        ? monthUtils.monthFromDate(
-            d.parseISO(fromDateRepr(latestTransaction.date)),
-          )
-        : currentMonth;
+      const earliestMonth = monthUtils.getMonth(earliestTransactionDate);
+      const latestTransactionMonth = monthUtils.getMonth(latestTransactionDate);
 
       const latestMonth =
         latestTransactionMonth > currentMonth
           ? latestTransactionMonth
           : currentMonth;
-
-      // Make sure the month selects are at least populated with a
-      // year's worth of months. We can undo this when we have fancier
-      // date selects.
-      const yearAgo = monthUtils.subMonths(latestMonth, 12);
-      if (earliestMonth > yearAgo) {
-        earliestMonth = yearAgo;
-      }
 
       const allMonths = monthUtils
         .rangeInclusive(earliestMonth, latestMonth)
@@ -1000,7 +997,7 @@ function SankeyInner({ widget }: SankeyInnerProps) {
                       color: theme.warningText,
                     }}
                   >
-                    <Text style={{ fontSize: 13 }}>
+                    <Text size="medium">
                       <Trans>
                         Filters on <strong>{ignoredFilterFieldsList}</strong>{' '}
                         are ignored in <strong>Budgeted</strong> mode.

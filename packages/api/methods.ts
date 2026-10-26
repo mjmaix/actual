@@ -111,6 +111,12 @@ export async function sync() {
   return send('api/sync');
 }
 
+/**
+ * Run bank sync for one account, or for every linked account when no
+ * `accountId` is given. Resolves with the ids of the transactions the sync
+ * reconciled, so callers can tell an idle sync from one that imported
+ * something without querying the transaction table themselves.
+ */
 export async function runBankSync(args?: {
   accountId: APIAccountEntity['id'];
 }) {
@@ -211,6 +217,12 @@ export function updateTransaction(
 
 export function deleteTransaction(id: TransactionEntity['id']) {
   return send('api/transaction-delete', { id });
+}
+
+export function mergeTransactions(
+  ids: [TransactionEntity['id'], TransactionEntity['id']],
+) {
+  return send('api/transactions-merge', { ids });
 }
 
 export function getAccounts() {
@@ -427,6 +439,13 @@ export function getSchedules() {
   return send('api/schedules-get');
 }
 
+export function getScheduleDates(
+  date: APIScheduleEntity['date'],
+  options: { start?: string; end?: string; count?: number } = {},
+) {
+  return send('api/schedule-dates-get', { date, ...options });
+}
+
 export function getIDByName(
   type: 'accounts' | 'schedules' | 'categories' | 'payees',
   name: string,
@@ -441,4 +460,11 @@ export function getServerVersion() {
 /** Read the budget's synced preferences (number format, currency, etc.). */
 export function getPreferences(): Promise<SyncedPrefs> {
   return send('preferences/get');
+}
+
+export function setPreference<T extends keyof SyncedPrefs>(
+  id: T,
+  value: SyncedPrefs[T] | undefined,
+): Promise<void> {
+  return send('preferences/save', { id, value });
 }

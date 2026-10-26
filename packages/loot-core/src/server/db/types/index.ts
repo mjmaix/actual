@@ -33,7 +33,9 @@ export type DbAccount = {
     | 'attention-required'
     | 'rate-limit-exceeded'
     | 'timed-out'
+    | 'server-down'
     | 'account-missing'
+    | 'not-configured'
     | null;
   account_group_id?: DbAccountGroup['id'] | null;
 };
@@ -107,6 +109,14 @@ export type DbCrdtMessage = {
   row: string;
   column: string;
   value: Uint8Array;
+};
+
+export type DbPendingMessage = {
+  timestamp: string;
+  dataset: string;
+  row: string;
+  column: string;
+  value: string;
 };
 
 export type DbNote = {

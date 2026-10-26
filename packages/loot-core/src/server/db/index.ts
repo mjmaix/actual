@@ -162,8 +162,11 @@ function resetQueryCache() {
   _queryCache = new LRUCache<string, Statement>({ max: 100 });
 }
 
-export function transaction(fn: () => void) {
-  return sqlite.transaction(db, fn);
+export function transaction(
+  fn: () => void,
+  options?: sqlite.TransactionOptions,
+) {
+  return sqlite.transaction(db, fn, options);
 }
 
 export function asyncTransaction(fn: () => Promise<void>) {
@@ -391,20 +394,25 @@ export async function insertCategoryGroup(
 }
 
 export async function updateCategoryGroup(
-  group: WithRequired<Partial<DbCategoryGroup>, 'id' | 'name' | 'is_income'>,
+  group: WithRequired<Partial<DbCategoryGroup>, 'id' | 'is_income'>,
 ) {
-  const existingGroup = await first<
-    Pick<DbCategoryGroup, 'id' | 'name' | 'hidden'>
-  >(
-    `SELECT id, name, hidden FROM category_groups WHERE UPPER(name) = ? AND id != ? AND tombstone = 0 LIMIT 1`,
-    [group.name.toUpperCase(), group.id],
-  );
-  if (existingGroup) {
-    throw new Error(
-      `A ${
-        existingGroup.hidden ? 'hidden ' : ''
-      }'${existingGroup.name}' category group already exists.`,
+  // An update that does not touch the name cannot introduce a duplicate, and
+  // `name` is genuinely absent on one: api/category-group-update forwards the
+  // caller's Partial, and update() writes only the keys it is given (#8857).
+  if (group.name !== undefined) {
+    const existingGroup = await first<
+      Pick<DbCategoryGroup, 'id' | 'name' | 'hidden'>
+    >(
+      `SELECT id, name, hidden FROM category_groups WHERE UPPER(name) = ? AND id != ? AND tombstone = 0 LIMIT 1`,
+      [group.name.toUpperCase(), group.id],
     );
+    if (existingGroup) {
+      throw new Error(
+        `A ${
+          existingGroup.hidden ? 'hidden ' : ''
+        }'${existingGroup.name}' category group already exists.`,
+      );
+    }
   }
   group = categoryGroupModel.validate(group, { update: true });
   return update('category_groups', group);
@@ -758,6 +766,7 @@ export function deleteAccount(account) {
 export async function moveAccount(
   id: DbAccount['id'],
   targetId: DbAccount['id'] | null,
+  accountGroupId?: DbAccountGroup['id'] | null,
 ) {
   const account = await first<DbAccount>(
     'SELECT * FROM accounts WHERE id = ?',
@@ -780,7 +789,13 @@ export async function moveAccount(
     for (const info of updates) {
       void update('accounts', info);
     }
-    void update('accounts', { id, sort_order });
+    void update('accounts', {
+      id,
+      sort_order,
+      ...(accountGroupId !== undefined && {
+        account_group_id: accountGroupId,
+      }),
+    });
   });
 }
 
